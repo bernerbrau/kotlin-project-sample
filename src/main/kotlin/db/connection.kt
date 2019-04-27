@@ -13,7 +13,7 @@ private fun getConnection() =
         password = "correct horse battery staple"
     }
 
-suspend fun <T> useConnection(action: suspend ConnectionPool<PostgreSQLConnection>.() -> T): T =
+suspend fun <T> withConnection(action: suspend ConnectionPool<PostgreSQLConnection>.() -> T): T =
     with(getConnection()) {
         try {
             action()

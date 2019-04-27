@@ -2,12 +2,13 @@ package net.bernerbits.sample.repo
 
 import com.github.jasync.sql.db.RowData
 import kotlinx.coroutines.future.await
-import net.bernerbits.sample.db.useConnection
+import net.bernerbits.sample.db.withConnection
 import net.bernerbits.sample.model.Account
+import net.bernerbits.sample.model.AccountFields
 
 object AccountRepo {
     suspend fun login(login: String, password: String): Account? =
-        useConnection {
+        withConnection {
             val result = sendPreparedStatement("select * from accounts where login = ? and pwd_hash = crypt(?, pwd_hash)", listOf(login, password)).await()
             result.rows
                 .asSequence()
@@ -17,9 +18,11 @@ object AccountRepo {
 
     private fun toAccount(rowData: RowData) =
         Account(
-            id=         rowData.getAs("id"),
-            login=      rowData.getAs("login"),
-            displayName=rowData.getAs("display_name")
+            id=    rowData.getAs("id"),
+            fields=AccountFields(
+                login=      rowData.getAs("login"),
+                displayName=rowData.getAs("display_name")
+            )
         )
 
 }

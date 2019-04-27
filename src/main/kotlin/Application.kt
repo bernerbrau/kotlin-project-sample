@@ -16,14 +16,17 @@ import com.fasterxml.jackson.datatype.joda.JodaModule
 import com.fasterxml.jackson.module.kotlin.jacksonObjectMapper
 import com.fasterxml.jackson.module.kotlin.readValue
 import io.ktor.jackson.*
-import com.github.jasync.sql.db.postgresql.PostgreSQLConnectionBuilder
 import io.ktor.auth.*
 import io.ktor.sessions.*
 import io.ktor.util.KtorExperimentalAPI
-import io.ktor.util.hex
+import net.bernerbits.sample.auth.AccountPrincipal
+import net.bernerbits.sample.auth.asAccount
+import net.bernerbits.sample.auth.asPrincipal
 import net.bernerbits.sample.model.Account
+import net.bernerbits.sample.model.TodoFields
 import net.bernerbits.sample.repo.AccountRepo
 import net.bernerbits.sample.repo.TodoRepo
+import net.bernerbits.sample.routes.Todos
 import java.io.File
 import java.util.*
 
@@ -63,7 +66,7 @@ fun Application.module(testing: Boolean = false) {
     }
 
     install(Sessions) {
-        cookie<Account>(
+        cookie<AccountPrincipal>(
             "TODOS_SESSION_ID",
             directorySessionStorage(File(".sessions"), cached=true)
         ) {
@@ -71,18 +74,18 @@ fun Application.module(testing: Boolean = false) {
             cookie.path = "/"
             serializer = object : SessionSerializer {
                 private val om = jacksonObjectMapper()
-                override fun deserialize(text: String) = om.readValue<Account>(text)
+                override fun deserialize(text: String) = om.readValue<AccountPrincipal>(text)
                 override fun serialize(session: Any) = om.writeValueAsString(session)
             }
         }
     }
 
     install(Authentication) {
-        session<Account>("session")
+        session<AccountPrincipal>("session")
         basic("basic") {
             realm = "TODO Service"
             validate { (name, password) ->
-                val account = AccountRepo.login(name,password)
+                val account = AccountRepo.login(name,password)?.asPrincipal()
                 if (account !== null) {
                     sessions.set(account)
                 }
@@ -94,15 +97,53 @@ fun Application.module(testing: Boolean = false) {
     routing {
         authenticate("session","basic") {
 
-            get("/") {
-                val account = call.authentication.principal<Account>() ?: throw AuthenticationException()
-                call.respondText("Hello, ${account.displayName}!", contentType = ContentType.Text.Plain)
+            get<Todos> {
+                asAccount { account ->
+                    TodoRepo.run {
+                        call.respond(account.todos().toList())
+                    }
+                }
             }
 
-            get("/todos") {
-                val account = call.authentication.principal<Account>() ?: throw AuthenticationException()
-                TodoRepo.run {
-                    call.respond(account.todos().toList())
+            post<Todos> {
+                asAccount { account ->
+                    TodoRepo.run {
+                        val todo = account.createTodo(call.receive<TodoFields>())
+                        call.response.header("Location",application.locations.href(Todos.Todo(id=todo.id)))
+                        call.respond(
+                            HttpStatusCode.Created,
+                            todo
+                        )
+                    }
+                }
+            }
+
+            get<Todos.Todo> { (_,todoId) ->
+                asAccount { account ->
+                    TodoRepo.run {
+                        call.respond(account.getTodo(todoId) ?: throw NotFoundException())
+                    }
+                }
+            }
+
+            put<Todos.Todo> { (_,todoId) ->
+                asAccount { account ->
+                    TodoRepo.run {
+                        val todo = account.updateTodo(todoId, call.receive<TodoFields>()) ?: throw NotFoundException()
+                        call.respond(todo)
+                    }
+                }
+            }
+
+            delete<Todos.Todo> { (_,todoId) ->
+                asAccount { account ->
+                    TodoRepo.run {
+                        if (account.deleteTodo(todoId)) {
+                            call.respond(HttpStatusCode.NoContent,"")
+                        } else {
+                            throw NotFoundException()
+                        }
+                    }
                 }
             }
         }
@@ -134,39 +175,17 @@ fun Application.module(testing: Boolean = false) {
             }
         }
 
-        get<MyLocation> {
-            call.respondText("Location: name=${it.name}, arg1=${it.arg1}, arg2=${it.arg2}")
-        }
-        // Register nested routes
-        get<Type.Edit> {
-            call.respondText("Inside $it")
-        }
-        get<Type.List> {
-            call.respondText("Inside $it")
-        }
-
         install(StatusPages) {
-            exception<AuthenticationException> { cause ->
+            exception<AuthenticationException> {
                 call.respond(HttpStatusCode.Unauthorized)
             }
-            exception<AuthorizationException> { cause ->
+            exception<AuthorizationException> {
                 call.respond(HttpStatusCode.Forbidden)
             }
 
         }
 
     }
-}
-
-@Location("/location/{name}")
-class MyLocation(val name: String, val arg1: Int = 42, val arg2: String = "default")
-
-@Location("/type/{name}") data class Type(val name: String) {
-    @Location("/edit")
-    data class Edit(val type: Type)
-
-    @Location("/list/{page}")
-    data class List(val type: Type, val page: Int)
 }
 
 class AuthenticationException : RuntimeException()
